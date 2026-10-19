@@ -1,0 +1,42 @@
+
+name: Compilar CleanYourTV APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar SDK 34
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Compilar APK
+        working-directory: launcher
+        run: bash ./gradlew --no-daemon assembleRelease
+
+      - name: Salvar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CleanYourTV-APK
+          path: launcher/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
