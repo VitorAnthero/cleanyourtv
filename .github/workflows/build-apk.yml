@@ -1,5 +1,5 @@
 
-name: Compilar CleanYourTV APK
+name: CleanYourTV personalizado - Anthero
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
       - name: Baixar codigo
         uses: actions/checkout@v4
 
-      - name: Configurar Java
+      - name: Configurar Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -27,16 +27,121 @@ jobs:
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Instalar SDK 34
+      - name: Instalar Android SDK 34
         run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Personalizar interface TCL
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          base = Path('launcher/app/src/main')
+          source = base / 'java/com/gathin/tvhome/MainActivity.java'
+          java = source.read_text(encoding='utf-8')
+
+          # Fixar fundo preto: nenhuma foto e nenhuma aura da cor do app.
+          substitutions = [
+              ('root.setBackgroundColor(cfg.backgroundColor);',
+               'root.setBackgroundColor(Color.BLACK);'),
+              ('if (cfg.wallpaper != null) showWallpaper(cfg.wallpaper);',
+               '// TCL personalizada: sem wallpaper; fundo preto fixo.'),
+              ('ambient = findViewById(R.id.ambient);',
+               'ambient = findViewById(R.id.ambient);\n        ambient.setVisibility(View.GONE);'),
+          ]
+          for old, new in substitutions:
+              count = java.count(old)
+              if count != 1:
+                  raise SystemExit(f'ERRO: esperado um trecho ({count} encontrados): {old}')
+              java = java.replace(old, new, 1)
+          source.write_text(java, encoding='utf-8')
+
+          # Traduzir botoes, dialogos e saudacao em todas as horas do dia.
+          strings = base / 'res/values/strings.xml'
+          tree = ET.parse(strings)
+          traducoes = {
+              'app_name': 'Início',
+              'inputs': 'Entradas',
+              'settings': 'Configurações',
+              'choose_input': 'Selecionar entrada',
+              'connected': 'Conectado',
+              'standby': 'Em espera',
+              'not_connected': 'Nenhum dispositivo',
+              'live_tv': 'TV ao vivo',
+              'no_inputs': 'Nenhuma entrada encontrada',
+              'good_morning': 'Olá, Anthero',
+              'good_afternoon': 'Olá, Anthero',
+              'good_evening': 'Olá, Anthero',
+              'good_night': 'Olá, Anthero',
+              'ethernet': 'Rede cabeada',
+              'offline': 'Sem conexão',
+              'not_available': 'Não disponível nesta TV',
+              'cant_open': 'Não foi possível abrir %1$s',
+              'dream_name': 'Relógio',
+              'vpn_off': 'VPN desligada',
+              'home_settings': 'Tela inicial padrão',
+              'home_settings_help': 'Escolha uma tela inicial nas configurações e pressione Home.',
+              'home_key_name': 'Botão Início',
+              'home_key_description': 'Faz o botão Início do controle abrir esta interface.',
+              'input_key_service_description': 'Abre as entradas pelo botão do controle.',
+              'card_prompt_title': 'Novo cartão de %1$s',
+              'card_prompt_body': '%1$s pode mostrar um cartão na tela inicial. Mantê-lo oculto preserva o ícone normal.',
+              'card_prompt_names': 'O cartão é %1$s. O aplicativo é %2$s.',
+              'card_prompt_resigned': '%1$s foi atualizado com outra assinatura. Escolha novamente.',
+              'card_prompt_relabelled': '%1$s mudou de nome. Escolha novamente.',
+              'card_prompt_hint': 'Você pode alterar isso depois: segure OK em Configurações.',
+              'card_prompt_identity': '%1$s, chave %2$s',
+              'card_keep_hidden': 'Manter oculto',
+              'card_show': 'Mostrar cartão',
+              'card_not_saved': 'Não foi possível salvar a escolha',
+              'module_cards': 'Cartões de módulos',
+              'no_module_cards': 'Nenhum cartão de módulo instalado',
+              'card_app_name': 'App: %1$s',
+              'card_state_shown': 'Visível',
+              'card_state_over_limit': 'Visível, acima do limite de 8',
+              'card_state_hidden': 'Oculto',
+              'card_state_new': 'Novo',
+              'card_state_new_key': 'Nova chave',
+              'card_state_new_label': 'Novo nome',
+          }
+          encontrados = set()
+          for element in tree.getroot().findall('string'):
+              key = element.get('name')
+              if key in traducoes:
+                  element.text = traducoes[key]
+                  encontrados.add(key)
+          ausentes = traducoes.keys() - encontrados
+          if ausentes:
+              raise SystemExit('Strings nao encontradas: ' + ', '.join(sorted(ausentes)))
+          tree.write(strings, encoding='utf-8', xml_declaration=True)
+
+          # Não deixar a saudação em CAIXA ALTA: "Olá, Anthero".
+          layout = base / 'res/layout/activity_main.xml'
+          text = layout.read_text(encoding='utf-8')
+          marker = 'android:id="@+id/greeting"'
+          pos = text.find(marker)
+          if pos < 0:
+              raise SystemExit('Nao foi encontrado o TextView da saudacao')
+          start = text.rfind('<TextView', 0, pos)
+          end = text.find('/>', pos) + 2
+          if start < 0 or end < 2:
+              raise SystemExit('Nao foi possivel identificar o bloco da saudacao')
+          trecho = text[start:end]
+          if trecho.count('android:textAllCaps="true"') != 1:
+              raise SystemExit('Esperada configuracao de caixa alta da saudacao')
+          trecho_novo = trecho.replace('android:textAllCaps="true"', 'android:textAllCaps="false"')
+          layout.write_text(text[:start] + trecho_novo + text[end:], encoding='utf-8')
+          print('Personalizacoes aplicadas: saudacao, PT-BR, fundo preto.')
+          print('Wi-Fi: o app ja suporta exibir o SSID; liberar localizacao apos instalar.')
+          PY
 
       - name: Compilar APK
         working-directory: launcher
         run: bash ./gradlew --no-daemon assembleRelease
 
-      - name: Salvar APK
+      - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: CleanYourTV-APK
+          name: CleanYourTV-Anthero-APK
           path: launcher/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
