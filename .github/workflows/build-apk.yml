@@ -1,5 +1,5 @@
 
-name: CleanYourTV personalizado - Anthero
+name: AntheroTV - HDMI e data corrigidos
 
 on:
   workflow_dispatch:
@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
       - name: Baixar codigo
         uses: actions/checkout@v4
@@ -40,25 +39,60 @@ jobs:
           source = base / 'java/com/gathin/tvhome/MainActivity.java'
           java = source.read_text(encoding='utf-8')
 
-          # Fixar fundo preto: nenhuma foto e nenhuma aura da cor do app.
+          # Fundo preto permanente, sem aura colorida.
           substitutions = [
               ('root.setBackgroundColor(cfg.backgroundColor);',
                'root.setBackgroundColor(Color.BLACK);'),
               ('if (cfg.wallpaper != null) showWallpaper(cfg.wallpaper);',
-               '// TCL personalizada: sem wallpaper; fundo preto fixo.'),
+               '// Sem wallpaper; fundo preto fixo.'),
               ('ambient = findViewById(R.id.ambient);',
                'ambient = findViewById(R.id.ambient);\n        ambient.setVisibility(View.GONE);'),
           ]
+
           for old, new in substitutions:
               count = java.count(old)
               if count != 1:
                   raise SystemExit(f'ERRO: esperado um trecho ({count} encontrados): {old}')
               java = java.replace(old, new, 1)
+
+          # Remover HDMI-CEC duplicado da contagem.
+          hdmi_old = 'if (!info.isPassthroughInput() || info.getType() != TvInputInfo.TYPE_HDMI) continue;'
+          hdmi_new = '''if (!info.isPassthroughInput() || info.getType() != TvInputInfo.TYPE_HDMI
+                          || info.getParentId() != null) continue;
+                CharSequence hdmiLabel = info.loadLabel(this);
+                if (hdmiLabel != null && hdmiLabel.toString().toLowerCase(Locale.ROOT).contains("playstation")) continue;'''
+
+          if java.count(hdmi_old) != 1:
+              raise SystemExit('ERRO: lista fisica HDMI mudou no codigo-fonte')
+          java = java.replace(hdmi_old, hdmi_new, 1)
+
+          # Mostrar apenas as portas HDMI fisicas.
+          entry_old = 'if (!info.isPassthroughInput()) continue;'
+          entry_new = '''if (!info.isPassthroughInput()) continue;
+                if (info.getType() == TvInputInfo.TYPE_HDMI) {
+                    CharSequence hdmiLabel = info.loadLabel(this);
+                    if (info.getParentId() != null
+                            || (hdmiLabel != null && hdmiLabel.toString().toLowerCase(Locale.ROOT).contains("playstation"))) continue;
+                }'''
+
+          if java.count(entry_old) != 1:
+              raise SystemExit('ERRO: rotina de listagem HDMI mudou no codigo-fonte')
+          java = java.replace(entry_old, entry_new, 1)
+
+          # Identificar o PS5 Pro na quarta entrada.
+          label_old = 'if (hdmi && !label.toUpperCase(Locale.ROOT).contains("HDMI")) label = "HDMI " + label;'
+          label_new = label_old + '\n                if (hdmi && label.trim().equalsIgnoreCase("HDMI 4")) label = "HDMI 4 - PS5 Pro";'
+
+          if java.count(label_old) != 1:
+              raise SystemExit('ERRO: nomeacao HDMI mudou no codigo-fonte')
+          java = java.replace(label_old, label_new, 1)
+
           source.write_text(java, encoding='utf-8')
 
-          # Traduzir botoes, dialogos e saudacao em todas as horas do dia.
+          # Traducao para portugues brasileiro.
           strings = base / 'res/values/strings.xml'
           tree = ET.parse(strings)
+
           traducoes = {
               'app_name': 'Início',
               'inputs': 'Entradas',
@@ -104,33 +138,162 @@ jobs:
               'card_state_new_key': 'Nova chave',
               'card_state_new_label': 'Novo nome',
           }
+
           encontrados = set()
+
           for element in tree.getroot().findall('string'):
               key = element.get('name')
               if key in traducoes:
                   element.text = traducoes[key]
                   encontrados.add(key)
+
           ausentes = traducoes.keys() - encontrados
           if ausentes:
               raise SystemExit('Strings nao encontradas: ' + ', '.join(sorted(ausentes)))
+
           tree.write(strings, encoding='utf-8', xml_declaration=True)
 
-          # Não deixar a saudação em CAIXA ALTA: "Olá, Anthero".
+          # Saudacao em caixa normal: Ola, Anthero.
           layout = base / 'res/layout/activity_main.xml'
           text = layout.read_text(encoding='utf-8')
+
           marker = 'android:id="@+id/greeting"'
           pos = text.find(marker)
+
           if pos < 0:
               raise SystemExit('Nao foi encontrado o TextView da saudacao')
+
           start = text.rfind('<TextView', 0, pos)
           end = text.find('/>', pos) + 2
+
           if start < 0 or end < 2:
               raise SystemExit('Nao foi possivel identificar o bloco da saudacao')
+
           trecho = text[start:end]
+
           if trecho.count('android:textAllCaps="true"') != 1:
               raise SystemExit('Esperada configuracao de caixa alta da saudacao')
-          trecho_novo = trecho.replace('android:textAllCaps="true"', 'android:textAllCaps="false"')
-          layout.write_text(text[:start] + trecho_novo + text[end:], encoding='utf-8')
+
+          trecho_novo = trecho.replace(
+              'android:textAllCaps="true"',
+              'android:textAllCaps="false"'
+          )
+
+          # Mover data para uma linha completa.
+          # Isso impede que OUTUBRO fique cortado.
+          tree = ET.ElementTree(
+              ET.fromstring(text[:start] + trecho_novo + text[end:])
+          )
+
+          android = '{http://schemas.android.com/apk/res/android}'
+          ET.register_namespace(
+              'android',
+              'http://schemas.android.com/apk/res/android'
+          )
+
+          main = tree.getroot()
+
+          content = next(
+              (e for e in main if e.tag == 'LinearLayout'),
+              None
+          )
+
+          if content is None:
+              raise SystemExit('ERRO: conteudo principal do layout nao encontrado')
+
+          header = next(
+              (e for e in content if e.tag == 'RelativeLayout'),
+              None
+          )
+
+          if header is None:
+              raise SystemExit('ERRO: cabecalho do layout nao encontrado')
+
+          left = next(
+              (e for e in header
+               if e.get(android + 'id') == '@+id/leftBlock'),
+              None
+          )
+
+          if left is None:
+              raise SystemExit('ERRO: bloco esquerdo nao encontrado')
+
+          time_row = next(
+              (e for e in left if e.tag == 'LinearLayout'),
+              None
+          )
+
+          if time_row is None:
+              raise SystemExit('ERRO: linha do relogio nao encontrada')
+
+          date_column = next(
+              (e for e in time_row
+               if e.tag == 'LinearLayout'
+               and any(
+                   c.get(android + 'id') == '@+id/date'
+                   for c in e
+               )),
+              None
+          )
+
+          if date_column is None:
+              raise SystemExit('ERRO: coluna da data nao encontrada')
+
+          time_row.remove(date_column)
+
+          separator = next(
+              (e for e in time_row
+               if e.tag == 'View'
+               and e.get(android + 'layout_width') == '1dp'),
+              None
+          )
+
+          if separator is not None:
+              time_row.remove(separator)
+
+          date_column.set(
+              android + 'layout_width',
+              'match_parent'
+          )
+          date_column.attrib.pop(
+              android + 'layout_weight',
+              None
+          )
+          date_column.attrib.pop(
+              android + 'layout_gravity',
+              None
+          )
+          date_column.set(
+              android + 'layout_marginTop',
+              '2dp'
+          )
+          date_column.set(
+              android + 'layout_marginBottom',
+              '0dp'
+          )
+
+          date_view = next(
+              e for e in date_column
+              if e.get(android + 'id') == '@+id/date'
+          )
+
+          date_view.set(
+              android + 'letterSpacing',
+              '0.04'
+          )
+
+          content.insert(
+              list(content).index(header) + 1,
+              date_column
+          )
+
+          tree.write(
+              layout,
+              encoding='utf-8',
+              xml_declaration=True
+          )
+
+          print('HDMI fisicas e data em linha completa configurados.')
           print('Personalizacoes aplicadas: saudacao, PT-BR, fundo preto.')
           print('Wi-Fi: o app ja suporta exibir o SSID; liberar localizacao apos instalar.')
           PY
@@ -142,6 +305,6 @@ jobs:
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: CleanYourTV-Anthero-APK
+          name: AntheroTV-HDMI-Data-APK
           path: launcher/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
